@@ -61,7 +61,7 @@ func realMain(c *cli.Context) {
 	log.Debug("Database init done")
 
 	r := gin.Default()
-	r.Use(static.Serve("/", static.LocalFile("./static", true)))
+	r.Use(static.Serve("/", static.LocalFile(c.String("assets"), true)))
 	r.GET("/p/:pasteid", getPaste)
 	r.GET("/raw/:pasteid", getRawPaste)
 	r.POST("/p", storePaste)
@@ -165,6 +165,11 @@ func main() {
 		cli.BoolFlag{
 			Name:  "sqldebug, s",
 			Usage: "Enables sql debugging only when loglevel is set to debug",
+		},
+		cli.StringFlag{
+			Name:  "assets, a",
+			Value: "./static",
+			Usage: "Path to static assets",
 		},
 		cli.StringFlag{
 			Name:  "bind, b",

@@ -99,7 +99,7 @@ func setupPyg() {
 			log.Fatalf("Error initialising Pygments when processing available lexers: %s", err)
 		}
 
-		if !strings.Index(line, "*") {
+		if strings.Index(line, "*") != 0 {
 			continue
 		}
 

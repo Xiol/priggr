@@ -1,0 +1,18 @@
+{{ template "header" . }}
+    <div class="container-fluid">
+      {{ template "error" . }}
+      <div class="row">
+        <div class="col-xs-10 col-xs-offset-1">
+            {{ if .Paste }}
+            <div id="pastewell">{{ .Paste }}</div>
+            {{ end }}
+        </div>
+        <div class="col-xs-1">
+          {{ if .Paste }}
+          <p><a class="btn btn-default btn-xs" id="viewraw" href="#">View Raw</a></p>
+          {{ end }}
+        </div>
+      </div>
+    </div>
+{{ template "pasteentry" . }}
+{{ template "footer" . }}

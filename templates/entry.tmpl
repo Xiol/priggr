@@ -1,10 +1,14 @@
-{{ define "pasteentry" }}
+{{ define "entry" }}
       <form class="form-horizontal">
         <div class="form-group">
-          <label for="syntaxchoice" class="col-md-2 control-label">Syntax</label>
+          <label for="syntax" class="col-md-2 control-label">Syntax</label>
           <div class="col-md-2">
-            <select id="syntaxchoice" class="form-control">
-              <option value="no-highlight">None</option>
+            <select id="syntax" class="form-control">
+              <option value="none">None</option>
+              <option value="autodetect">Auto Detect</option>
+              {{ range .Languages }}
+              <option value="{{ . }}">{{ . }}</option>
+              {{ end }}
             </select>
           </div>
         </div>

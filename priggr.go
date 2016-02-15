@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	// Loads of dependencies, and what?
@@ -17,6 +21,8 @@ import (
 
 // Global? Come at me, bro.
 var db gorm.DB
+var pygpath string
+var langs []string
 
 type LogFormatter struct{}
 
@@ -60,6 +66,11 @@ func realMain(c *cli.Context) {
 	db.AutoMigrate(&Paste{})
 	log.Debug("Database init done")
 
+	if pygpath, err := exec.LookPath("pygmentize"); err != nil {
+		log.Fatalf("You do not appear to have Pygments installed. Please install it!")
+	}
+	setupPyg()
+
 	r := gin.Default()
 	r.Use(static.Serve("/", static.LocalFile(c.String("assets"), true)))
 	r.GET("/p/:pasteid", getPaste)
@@ -70,12 +81,78 @@ func realMain(c *cli.Context) {
 	r.Run(fmt.Sprintf("%s:%d", c.String("bind"), c.Int("port")))
 }
 
+func setupPyg() {
+	cmd := exec.Command(pygpath, "-L", "lexers")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		log.Fatalf("Error initialising Pygments: %s", err)
+	}
+
+	repl := strings.NewReplacer("* ", "", ":\n", "")
+
+	for {
+		line, err := out.ReadString("\n")
+		if err != nil && err == io.EOF {
+			break
+		} else if err != nil {
+			log.Fatalf("Error initialising Pygments when processing available lexers: %s", err)
+		}
+
+		if !strings.Index(line, "*") {
+			continue
+		}
+
+		langs = append(langs, repl.Replace(line))
+	}
+
+	log.Debugf("Pygments init complete, found %d lexers", len(langs))
+}
+
+func doHighlight(code, lexer string) string {
+	if lexer == "none" || lexer == "" {
+		return code
+	}
+
+	defaults := []string{"-f", "html", "-O", "linenos=table,style=colorful"}
+
+	var cmd *exec.Cmd
+	if lexer == "autodetect" {
+		cmd = exec.Command(pygpath, "-g", defaults...)
+	} else {
+		cmd := exec.Command(pygpath, "-l", lexer, defaults...)
+	}
+	cmd.Stdin = strings.NewReader(code)
+
+	var out, stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		log.Error("Failed to run Pygments: %s. Stderr: %s", err, stderr.String())
+		return code
+	}
+
+	return out.String()
+}
+
 func storePaste(c *gin.Context) {
 	paste := Paste{}
 	err := c.Bind(&paste)
 	if err != nil {
 		c.JSON(400, gin.H{"message": fmt.Sprintf("Could not marshal POST data: %s", err)})
 		return
+	}
+
+	found := false
+	for i := range langs {
+		if langs[i] == paste.Syntax {
+			found = true
+		}
+	}
+
+	if !found {
+		paste.Syntax = "none"
 	}
 
 	paste.Created = time.Now().Unix()
@@ -138,6 +215,7 @@ func getPaste(c *gin.Context) {
 	if err != nil {
 		return
 	}
+	paste.Paste = doHighlight(paste.Paste, paste.Syntax)
 	c.JSON(200, paste)
 }
 

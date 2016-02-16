@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
-	"io"
+	"html/template"
+	"math/rand"
 	"os"
 	"os/exec"
 	"strings"
@@ -16,10 +18,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jinzhu/gorm"
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/satori/go.uuid"
 )
 
-// Global? Come at me, bro.
+// Globals? Come at me, bro.
 var db gorm.DB
 var pygpath string
 var langs []string
@@ -34,14 +35,16 @@ type Paste struct {
 	ID              int    `json:"-"`
 	PasteID         string `json:"paste_id" gorm:"column:paste_id" sql:"unique_index"`
 	Created         int64  `json:"created"`
-	Syntax          string `json:"syntax"`
-	Paste           string `json:"paste"`
-	Expires         int64  `json:"expires,string"`
+	Syntax          string `json:"syntax" form:"syntax"`
+	Paste           string `json:"paste" form:"paste"`
+	Expires         int64  `json:"expires,string" form:"expires"`
 	ExpireTimestamp int64  `json:"-"`
-	Hits            int64  `json"-"`
+	Hits            int64  `json:"-"`
 }
 
 func realMain(c *cli.Context) {
+	rand.Seed(time.Now().UnixNano())
+
 	lvl, err := log.ParseLevel(c.String("loglevel"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not parse log level. Must be one of: debug, info, warning, error, panic, fatal\n")
@@ -66,16 +69,20 @@ func realMain(c *cli.Context) {
 	db.AutoMigrate(&Paste{})
 	log.Debug("Database init done")
 
-	if pygpath, err := exec.LookPath("pygmentize"); err != nil {
+	if pygpath, err = exec.LookPath("pygmentize"); err != nil {
 		log.Fatalf("You do not appear to have Pygments installed. Please install it!")
 	}
 	setupPyg()
 
 	r := gin.Default()
-	r.Use(static.Serve("/", static.LocalFile(c.String("assets"), true)))
-	r.GET("/p/:pasteid", getPaste)
-	r.GET("/raw/:pasteid", getRawPaste)
-	r.POST("/p", storePaste)
+	r.LoadHTMLGlob(c.String("templates") + "/*")
+	r.Use(static.Serve("/static", static.LocalFile(c.String("assets"), true)))
+	// r.GET("/p/:pasteid", getPaste)
+	// r.GET("/raw/:pasteid", getRawPaste)
+	//r.POST("/p", storePaste)
+	r.GET("/", index)
+	r.POST("/", storePaste)
+	r.GET("/raw", index)
 
 	log.Warningf("Priggr serving on %s:%d", c.String("bind"), c.Int("port"))
 	r.Run(fmt.Sprintf("%s:%d", c.String("bind"), c.Int("port")))
@@ -83,45 +90,53 @@ func realMain(c *cli.Context) {
 
 func setupPyg() {
 	cmd := exec.Command(pygpath, "-L", "lexers")
-	var out bytes.Buffer
-	cmd.Stdout = &out
+	out := &bytes.Buffer{}
+	cmd.Stdout = out
 	if err := cmd.Run(); err != nil {
 		log.Fatalf("Error initialising Pygments: %s", err)
 	}
 
-	repl := strings.NewReplacer("* ", "", ":\n", "")
+	repl := strings.NewReplacer("* ", "", ":", "")
 
-	for {
-		line, err := out.ReadString("\n")
-		if err != nil && err == io.EOF {
-			break
-		} else if err != nil {
-			log.Fatalf("Error initialising Pygments when processing available lexers: %s", err)
-		}
-
-		if strings.Index(line, "*") != 0 {
+	scanner := bufio.NewScanner(out)
+	for scanner.Scan() {
+		if strings.Index(scanner.Text(), "*") != 0 {
 			continue
 		}
 
-		langs = append(langs, repl.Replace(line))
+		lexer := repl.Replace(scanner.Text())
+		ml := strings.Split(lexer, ",")
+		lexer = strings.TrimSpace(ml[0])
+
+		langs = append(langs, lexer)
 	}
 
-	log.Debugf("Pygments init complete, found %d lexers", len(langs))
+	if err := scanner.Err(); err != nil {
+		log.Fatalf("Error when scanning available lexers from Pygments: %s", err)
+	}
+
+	log.Infof("Pygments init complete, found %d lexers", len(langs))
+	log.Debugf("Lexers: %v", langs)
 }
 
 func doHighlight(code, lexer string) string {
 	if lexer == "none" || lexer == "" {
-		return code
+		lexer = "text"
 	}
 
 	defaults := []string{"-f", "html", "-O", "linenos=table,style=colorful"}
 
 	var cmd *exec.Cmd
+	var args []string
 	if lexer == "autodetect" {
-		cmd = exec.Command(pygpath, "-g", defaults...)
+		args = append(args, "-g")
 	} else {
-		cmd := exec.Command(pygpath, "-l", lexer, defaults...)
+		args = append(args, "-l", lexer)
 	}
+	args = append(args, defaults...)
+
+	log.Debugf("Running Pygments with args: %v", args)
+	cmd = exec.Command(pygpath, args...)
 	cmd.Stdin = strings.NewReader(code)
 
 	var out, stderr bytes.Buffer
@@ -136,12 +151,61 @@ func doHighlight(code, lexer string) string {
 	return out.String()
 }
 
+func index(c *gin.Context) {
+	var paste Paste
+	var err error
+
+	pasteid := c.Query("p")
+	if pasteid != "" {
+		paste, err = dbFindPaste(pasteid)
+		if err != nil {
+			c.HTML(404, "index.tmpl", gin.H{
+				"Languages": langs,
+				"ErrorMsg":  err,
+			})
+			return
+		}
+	}
+
+	// Yeah, this is bad. No regrets.
+	if strings.Contains(c.Request.URL.RequestURI(), "/raw") {
+		c.String(200, paste.Paste)
+		return
+	}
+
+	var hlpaste template.HTML
+	if paste.Paste != "" {
+		hlpaste = template.HTML(doHighlight(paste.Paste, paste.Syntax))
+	}
+
+	c.HTML(200, "index.tmpl", gin.H{
+		"Languages": langs,
+		"Syntax":    paste.Syntax,
+		"Expires":   paste.Expires,
+		"ID":        paste.PasteID,
+		"Paste":     hlpaste,
+		"RawPaste":  paste.Paste,
+	})
+	return
+}
+
 func storePaste(c *gin.Context) {
 	paste := Paste{}
 	err := c.Bind(&paste)
 	if err != nil {
-		c.JSON(400, gin.H{"message": fmt.Sprintf("Could not marshal POST data: %s", err)})
+		log.Errorf("Could not bind paste: %s", err)
+		c.HTML(400, "index.tmpl", gin.H{
+			"Languages": langs,
+			"ErrorMsg":  fmt.Sprintf("Could not parse the paste you sent."),
+		})
 		return
+	}
+
+	if paste.Paste == "" {
+		c.HTML(400, "index.tmpl", gin.H{
+			"Languages": langs,
+			"ErrorMsg":  fmt.Sprintf("You seem to be missing something..."),
+		})
 	}
 
 	found := false
@@ -151,12 +215,12 @@ func storePaste(c *gin.Context) {
 		}
 	}
 
-	if !found {
+	if !found && paste.Syntax != "autodetect" {
 		paste.Syntax = "none"
 	}
 
 	paste.Created = time.Now().Unix()
-	paste.PasteID = uuid.NewV4().String()
+	paste.PasteID = fmt.Sprintf("%x", (time.Now().UnixNano()/2)&rand.Int63n(999999999))
 
 	if paste.Expires > 0 {
 		paste.ExpireTimestamp = time.Now().Add(time.Duration(paste.Expires) * time.Second).Unix()
@@ -166,13 +230,11 @@ func storePaste(c *gin.Context) {
 	log.Debugf("Paste data: %+v", paste)
 
 	db.Save(&paste)
-	c.JSON(200, gin.H{"message": "ok", "id": paste.PasteID})
+	c.Redirect(302, "/?p="+paste.PasteID)
 }
 
-func dbFindPaste(c *gin.Context) (Paste, error) {
-	pasteid := c.Param("pasteid")
+func dbFindPaste(pasteid string) (Paste, error) {
 	if pasteid == "" {
-		c.JSON(400, gin.H{"message": "Paste ID not provided"})
 		return Paste{}, fmt.Errorf("Paste ID not provided")
 	}
 
@@ -181,7 +243,6 @@ func dbFindPaste(c *gin.Context) (Paste, error) {
 	db.Find(&paste, "paste_id = ?", pasteid)
 
 	if paste.Paste == "" {
-		c.JSON(404, gin.H{"message": "Paste not found"})
 		return Paste{}, fmt.Errorf("Paste not found")
 	}
 
@@ -202,22 +263,22 @@ func dbFindPaste(c *gin.Context) (Paste, error) {
 	return paste, nil
 }
 
-func getRawPaste(c *gin.Context) {
-	paste, err := dbFindPaste(c)
-	if err != nil {
-		return
-	}
-	c.String(200, paste.Paste)
-}
-
-func getPaste(c *gin.Context) {
-	paste, err := dbFindPaste(c)
-	if err != nil {
-		return
-	}
-	paste.Paste = doHighlight(paste.Paste, paste.Syntax)
-	c.JSON(200, paste)
-}
+// func getRawPaste(c *gin.Context) {
+// 	paste, err := dbFindPaste(c)
+// 	if err != nil {
+// 		return
+// 	}
+// 	c.String(200, paste.Paste)
+// }
+//
+// func getPaste(c *gin.Context) {
+// 	paste, err := dbFindPaste(c)
+// 	if err != nil {
+// 		return
+// 	}
+// 	paste.Paste = doHighlight(paste.Paste, paste.Syntax)
+// 	c.JSON(200, paste)
+// }
 
 func expirePastes() {
 	log.Debug("Expire timer fired, deleting expired pastes")
@@ -248,6 +309,11 @@ func main() {
 			Name:  "assets, a",
 			Value: "./static",
 			Usage: "Path to static assets",
+		},
+		cli.StringFlag{
+			Name:  "templates, t",
+			Value: "./templates",
+			Usage: "Path to templates",
 		},
 		cli.StringFlag{
 			Name:  "bind, b",

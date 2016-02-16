@@ -1,3 +1,7 @@
+body {
+    font-family: Bitter, sans-serif;
+}
+
 .container-fluid {
     margin-top: 20px;
 }
@@ -26,4 +30,16 @@ pre code {
 
 .cbin-title {
     font-family: Bitter, sans-serif;
+}
+
+.highlighttable {
+    width: 100%;
+}
+
+.linenos {
+    white-space: nowrap;
+}
+
+.code {
+    width: 99%;
 }

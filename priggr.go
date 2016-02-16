@@ -77,9 +77,6 @@ func realMain(c *cli.Context) {
 	r := gin.Default()
 	r.LoadHTMLGlob(c.String("templates") + "/*")
 	r.Use(static.Serve("/static", static.LocalFile(c.String("assets"), true)))
-	// r.GET("/p/:pasteid", getPaste)
-	// r.GET("/raw/:pasteid", getRawPaste)
-	//r.POST("/p", storePaste)
 	r.GET("/", index)
 	r.POST("/", storePaste)
 	r.GET("/raw", index)
@@ -262,23 +259,6 @@ func dbFindPaste(pasteid string) (Paste, error) {
 
 	return paste, nil
 }
-
-// func getRawPaste(c *gin.Context) {
-// 	paste, err := dbFindPaste(c)
-// 	if err != nil {
-// 		return
-// 	}
-// 	c.String(200, paste.Paste)
-// }
-//
-// func getPaste(c *gin.Context) {
-// 	paste, err := dbFindPaste(c)
-// 	if err != nil {
-// 		return
-// 	}
-// 	paste.Paste = doHighlight(paste.Paste, paste.Syntax)
-// 	c.JSON(200, paste)
-// }
 
 func expirePastes() {
 	log.Debug("Expire timer fired, deleting expired pastes")

@@ -141,7 +141,7 @@ func doHighlight(code, lexer string) string {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		log.Error("Failed to run Pygments: %s. Stderr: %s", err, stderr.String())
+		log.Errorf("Failed to run Pygments: %s. Stderr: %s", err, stderr.String())
 		return code
 	}
 

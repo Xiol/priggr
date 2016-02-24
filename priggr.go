@@ -121,7 +121,7 @@ func doHighlight(code, lexer string) string {
 		lexer = "text"
 	}
 
-	defaults := []string{"-f", "html", "-O", "linenos=table,style=colorful"}
+	defaults := []string{"-f", "html", "-O", "linenos=table,style=colorful,encoding=utf-8"}
 
 	var cmd *exec.Cmd
 	var args []string
@@ -213,7 +213,7 @@ func storePaste(c *gin.Context) {
 	}
 
 	if !found && paste.Syntax != "autodetect" {
-		paste.Syntax = "none"
+		paste.Syntax = "text"
 	}
 
 	paste.Created = time.Now().Unix()
